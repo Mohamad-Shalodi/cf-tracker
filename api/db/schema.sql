@@ -15,6 +15,6 @@ CREATE TABLE IF NOT EXISTS submission(
     problem_name VARCHAR(512) NOT NULL,
     problem_rate INTEGER NOT NULL,
     creation_time TIMESTAMP NOT NULL,
-    FOREIGN KEY (id_user) REFERENCES user(id_user) ON DELETE CASCADE,
+    FOREIGN KEY (id_user) REFERENCES user(id_user) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX user_creation_time ON submission (id_user, creation_time);
