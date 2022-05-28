@@ -274,16 +274,20 @@ async def get_ranks(msg: GetRanksRequest):
     to_date = datetime(msg.year, msg.month + 1, 1, 0, 0, 0) + timedelta(seconds = -1)
 
     result = []
-    rank = 1
+    
     for user in users['users']:
         request_body = GetScoreRequest(handle=user['handle'], from_date=from_date, to_date=to_date)
         score = await get_score(request_body)
         result.append({
             'handle': user['handle'],
             'display_name': user['display_name'],
-            'rank': rank,
             'score': score['score']
         })
+    
+    sorted_result = sorted(result, key=lambda d: d['score'], reverse=True) 
+    rank = 1
+    for item in sorted_result:
+        item['rank'] = rank
         rank += 1
 
-    return result
+    return sorted_result
