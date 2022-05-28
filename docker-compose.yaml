@@ -1,0 +1,30 @@
+version: "3"
+services:
+  cf_tracker_db:
+    image: mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: cf_tracker
+    ports:
+      - "3308:3306"
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d
+      - datavolume:/var/lib/mysql
+    networks:
+      - cf_tracker
+
+  cf_tracker_app:
+    build: .
+    ports:
+      - "3000:80"
+    depends_on:
+      - cf_tracker_db
+    networks:
+      - cf_tracker
+
+networks:
+  cf_tracker:
+
+volumes:
+  datavolume:
