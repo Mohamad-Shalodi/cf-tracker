@@ -15,11 +15,18 @@ services:
       - cf_tracker
 
   cf_tracker_app:
-    build: .
+    build: ./api/
     ports:
       - "3000:80"
     depends_on:
       - cf_tracker_db
+    networks:
+      - cf_tracker
+  
+  cf_tracker_syncer:
+    build: ./cron/
+    depends_on:
+      - cf_tracker_app
     networks:
       - cf_tracker
 
