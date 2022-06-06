@@ -5,11 +5,13 @@ import asyncio
 import mysql.connector
 import json
 import jwt
+import random
 from typing import Optional, List
 from datetime import datetime, date, timedelta
 from fastapi import FastAPI, Header, Depends, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 class CreateUserRequest(BaseModel):
     handle: str
@@ -26,6 +28,9 @@ class GetScoreRequest(BaseModel):
 class GetRanksRequest(BaseModel):
     year: int
     month: int
+
+class PublishHtmlContentRequest(BaseModel):
+    html: str
 
 
 def get_db_connection():
@@ -50,7 +55,7 @@ async def get_users():
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute(f'''
-        SELECT handle, display_name
+        SELECT handle, display_name, image
         FROM user
     ''')
     rows = db_cursor.fetchall()
@@ -59,7 +64,8 @@ async def get_users():
     for row in rows:
         users.append({
             'handle': row[0],
-            'display_name': row[1]
+            'display_name': row[1],
+            'image': row[2]
         })
     return {
         'users': users
@@ -67,18 +73,28 @@ async def get_users():
 
 @app.post("/user")
 async def create_user(msg: CreateUserRequest):
+    response = requests.get(f"https://codeforces.com/api/user.info?handles={msg.handle}")
+    if response.status_code != 200:
+        return {
+            'status': 'failed',
+            'message': 'cf api error'
+        }
+
+    image = response.json()['result'][0]['titlePhoto']
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute('''
         INSERT INTO user
-        (handle, display_name)
-        VALUES(%s, %s)
-    ''', [msg.handle, msg.display_name])
+        (handle, display_name, image)
+        VALUES(%s, %s, %s)
+    ''', [msg.handle, msg.display_name, image])
     db.commit()
     
     return {
         'status': 'success'
     }
+
+    # ALTER TABLE user ADD COLUMN image VARCHAR(256) DEFAULT 'https://userpic.codeforces.org/no-title.jpg';
 
 @app.delete("/user/{handle}")
 async def delete_user(handle: str):
@@ -281,6 +297,8 @@ async def get_ranks(msg: GetRanksRequest):
         result.append({
             'handle': user['handle'],
             'display_name': user['display_name'],
+            'image': user['image'],
+            'solved': score['solved'],
             'score': score['score']
         })
     
@@ -291,3 +309,35 @@ async def get_ranks(msg: GetRanksRequest):
         rank += 1
 
     return sorted_result
+
+
+@app.post("/publish-html-content")
+async def publish_html_content(msg: PublishHtmlContentRequest):
+    code = f'P{str(random.randint(100000000, 999999999))}'
+    db = get_db_connection()
+    db_cursor = db.cursor()
+    db_cursor.execute('''
+        INSERT INTO html_content
+        (code, html)
+        VALUES(%s, %s)
+    ''', [code, msg.html])
+    db.commit()
+    
+    return {
+        'status': 'success',
+        'code': code
+    }
+
+@app.get("/p/{code}")
+async def get_html_content(code: str):
+    db = get_db_connection()
+    db_cursor = db.cursor()
+    db_cursor.execute(f'''
+        SELECT html
+        FROM html_content
+        WHERE code = '{code}'
+    ''')
+    rows = db_cursor.fetchall()
+    if len(rows) == 0:
+        return HTMLResponse(content='404! page not found', status_code=200)
+    return HTMLResponse(content=rows[0][0], status_code=200)
