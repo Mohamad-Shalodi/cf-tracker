@@ -111,7 +111,7 @@ async def delete_user(handle: str):
     }
 
 @app.post("/user/sync")
-async def sync_user(msg: SyncUserRequest):
+async def sync_user(msg: SyncUserRequest, force: bool = False):
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute(f'''
@@ -131,63 +131,11 @@ async def sync_user(msg: SyncUserRequest):
     last_synced_date = rows[0][1]
 
     # sync allowed every 1 hour only
-    if (now_date - last_synced_date).total_seconds() < 60 * 60:
+    if not force and (now_date - last_synced_date).total_seconds() < 60 * 60:
         return {
             'status': 'failed',
             'message': 'recently synced'
         }
-
-    response = requests.get(f"https://codeforces.com/api/user.status?handle={msg.handle}&from=1&count=10")
-    if response.status_code != 200:
-        return {
-            'status': 'failed',
-            'message': 'cf api error'
-        }
-
-    db_cursor = db.cursor()
-    db_cursor.execute(f'''
-        SELECT cf_reference
-        FROM submission
-        WHERE id_user = {id_user}
-        ORDER BY creation_time DESC
-        LIMIT 1
-    ''')
-    rows = db_cursor.fetchall()
-    last_synced_submission_cf_reference = None
-    if len(rows) > 0:
-        last_synced_submission_cf_reference = rows[0][0]
-
-    submissions = response.json().get('result', [])
-    need_complete_sync = True
-    if len(submissions) == 0:
-        need_complete_sync = False
-
-    for submission in submissions:
-        cf_reference = submission['id']
-        if last_synced_submission_cf_reference is not None and cf_reference == last_synced_submission_cf_reference:
-            need_complete_sync = False
-            break
-
-        creation_time = datetime.fromtimestamp(submission['creationTimeSeconds'])
-        problem_name = submission['problem']['name']
-        problem_rate = int(submission.get('problem', {}).get('rating', 0))
-        verdict = submission.get('verdict', 'WRONG_ANSWER')
-        if verdict != "OK":
-            continue
-
-        db_cursor = db.cursor()
-        db_cursor.execute('''
-            INSERT INTO submission
-            (id_user, cf_reference, problem_name, problem_rate, creation_time)
-            VALUES(%s, %s, %s, %s, %s)
-        ''', [id_user, cf_reference, problem_name, problem_rate, creation_time])
-        db.commit()
-    if not need_complete_sync:
-        return {
-            'status': 'success',
-            'message': 'fast sync'
-        }
-
 
     response = requests.get(f"https://codeforces.com/api/user.status?handle={msg.handle}&from=1&count=999999999")
     if response.status_code != 200:
@@ -215,7 +163,21 @@ async def sync_user(msg: SyncUserRequest):
             ''', [id_user, cf_reference, problem_name, problem_rate, creation_time])
             db.commit()
         except Exception as e:
-            continue
+            db_cursor = db.cursor()
+            db_cursor.execute('''
+                UPDATE submission
+                SET problem_rate = %s
+                WHERE cf_reference = %s
+            ''', [problem_rate, cf_reference])
+            db.commit()
+
+    db_cursor = db.cursor()
+    db_cursor.execute('''
+        UPDATE user
+        SET last_synced_at = NOW()
+        WHERE id_user = %s
+    ''', [id_user])
+    db.commit()
 
     return {
         'status': 'success',
