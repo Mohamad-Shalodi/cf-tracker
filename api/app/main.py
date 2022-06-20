@@ -145,10 +145,10 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
         }
 
     submissions = response.json().get('result', [])
+    submissions = list(reversed(submissions))
     for submission in submissions:
-        cf_reference = submission['id']
+        problem_key = f"{submission['problem']['contestId']} + {submission['problem']['index']}"
         creation_time = datetime.fromtimestamp(submission['creationTimeSeconds'])
-        problem_name = submission['problem']['name']
         problem_rate = int(submission.get('problem', {}).get('rating', 0))
         verdict = submission.get('verdict', 'WRONG_ANSWER')
         if verdict != "OK":
@@ -158,18 +158,19 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
             db_cursor = db.cursor()
             db_cursor.execute('''
                 INSERT INTO submission
-                (id_user, cf_reference, problem_name, problem_rate, creation_time)
-                VALUES(%s, %s, %s, %s, %s)
-            ''', [id_user, cf_reference, problem_name, problem_rate, creation_time])
+                (id_user, problem_key, problem_rate, creation_time)
+                VALUES(%s, %s, %s, %s)
+            ''', [id_user, problem_key, problem_rate, creation_time])
             db.commit()
         except Exception as e:
-            db_cursor = db.cursor()
-            db_cursor.execute('''
-                UPDATE submission
-                SET problem_rate = %s
-                WHERE cf_reference = %s
-            ''', [problem_rate, cf_reference])
-            db.commit()
+            if (now_date - creation).total_seconds() < 60 * 60 * 24 * 7:
+                db_cursor = db.cursor()
+                db_cursor.execute('''
+                    UPDATE submission
+                    SET problem_rate = %s
+                    WHERE problem_key = %s
+                ''', [problem_rate, problem_key])
+                db.commit()
 
     db_cursor = db.cursor()
     db_cursor.execute('''
@@ -205,7 +206,7 @@ async def get_score(msg: GetScoreRequest):
 
     db_cursor = db.cursor()
     db_cursor.execute(f'''
-        SELECT problem_name, problem_rate
+        SELECT problem_rate
         FROM submission
         WHERE
             id_user = '{id_user}' AND
@@ -230,8 +231,7 @@ async def get_score(msg: GetScoreRequest):
     solved = 0
     problems = {}
     for row in rows:
-        problem_name = row[0]
-        problem_rate = row[1]
+        problem_rate = row[0]
         solved += 1
         score += scores[problem_rate]
         if problem_rate in problems:
