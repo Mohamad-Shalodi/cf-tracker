@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 class CreateUserRequest(BaseModel):
     handle: str
     display_name: str
+    id_discord_user: str
 
 class SyncUserRequest(BaseModel):
     handle: str
@@ -85,9 +86,9 @@ async def create_user(msg: CreateUserRequest):
     db_cursor = db.cursor()
     db_cursor.execute('''
         INSERT INTO user
-        (handle, display_name, image)
-        VALUES(%s, %s, %s)
-    ''', [msg.handle, msg.display_name, image])
+        (handle, display_name, image, id_discord_user)
+        VALUES(%s, %s, %s, %s)
+    ''', [msg.handle, msg.display_name, image, msg.id_discord_user])
     db.commit()
     
     return {
@@ -163,7 +164,7 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
             ''', [id_user, problem_key, problem_rate, creation_time])
             db.commit()
         except Exception as e:
-            if (now_date - creation).total_seconds() < 60 * 60 * 24 * 7:
+            if (now_date - creation_time).total_seconds() < 60 * 60 * 24 * 7:
                 db_cursor = db.cursor()
                 db_cursor.execute('''
                     UPDATE submission
