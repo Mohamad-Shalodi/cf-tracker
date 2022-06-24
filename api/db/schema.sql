@@ -13,10 +13,11 @@ CREATE TABLE IF NOT EXISTS user(
 CREATE TABLE IF NOT EXISTS submission(
     id_submission INTEGER AUTO_INCREMENT PRIMARY KEY,
     id_user INTEGER NOT NULL,
-    problem_key varchar(50) UNIQUE NOT NULL,
+    problem_key varchar(50) NOT NULL,
     problem_rate INTEGER NOT NULL,
     creation_time TIMESTAMP NOT NULL,
-    FOREIGN KEY (id_user) REFERENCES user(id_user) ON DELETE CASCADE
+    FOREIGN KEY (id_user) REFERENCES user(id_user) ON DELETE CASCADE,
+    UNIQUE KEY user_problem (id_user, problem_key)
 );
 CREATE UNIQUE INDEX user_creation_time ON submission (id_user, creation_time);
 
