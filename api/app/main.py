@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 class CreateUserRequest(BaseModel):
     handle: str
     display_name: str
+    id_discord_user: str
 
 class SyncUserRequest(BaseModel):
     handle: str
@@ -24,10 +25,12 @@ class GetScoreRequest(BaseModel):
     handle: str
     from_date: datetime
     to_date: datetime
+    id_discord_user: Optional[str]
 
 class GetRanksRequest(BaseModel):
     year: int
     month: int
+    id_discord_user: Optional[str]
 
 class PublishHtmlContentRequest(BaseModel):
     html: str
@@ -85,9 +88,9 @@ async def create_user(msg: CreateUserRequest):
     db_cursor = db.cursor()
     db_cursor.execute('''
         INSERT INTO user
-        (handle, display_name, image)
-        VALUES(%s, %s, %s)
-    ''', [msg.handle, msg.display_name, image])
+        (handle, display_name, image, id_discord_user)
+        VALUES(%s, %s, %s, %s)
+    ''', [msg.handle, msg.display_name, image, msg.id_discord_user])
     db.commit()
     
     return {
@@ -145,10 +148,10 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
         }
 
     submissions = response.json().get('result', [])
+    submissions = list(reversed(submissions))
     for submission in submissions:
-        cf_reference = submission['id']
+        problem_key = f"{submission['problem']['contestId']}{submission['problem']['index']}"
         creation_time = datetime.fromtimestamp(submission['creationTimeSeconds'])
-        problem_name = submission['problem']['name']
         problem_rate = int(submission.get('problem', {}).get('rating', 0))
         verdict = submission.get('verdict', 'WRONG_ANSWER')
         if verdict != "OK":
@@ -158,18 +161,19 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
             db_cursor = db.cursor()
             db_cursor.execute('''
                 INSERT INTO submission
-                (id_user, cf_reference, problem_name, problem_rate, creation_time)
-                VALUES(%s, %s, %s, %s, %s)
-            ''', [id_user, cf_reference, problem_name, problem_rate, creation_time])
+                (id_user, problem_key, problem_rate, creation_time)
+                VALUES(%s, %s, %s, %s)
+            ''', [id_user, problem_key, problem_rate, creation_time])
             db.commit()
         except Exception as e:
-            db_cursor = db.cursor()
-            db_cursor.execute('''
-                UPDATE submission
-                SET problem_rate = %s
-                WHERE cf_reference = %s
-            ''', [problem_rate, cf_reference])
-            db.commit()
+            if (now_date - creation_time).total_seconds() >= 60 * 60 * 24 * 7:
+                db_cursor = db.cursor()
+                db_cursor.execute('''
+                    UPDATE submission
+                    SET problem_rate = %s
+                    WHERE problem_key = %s
+                ''', [problem_rate, problem_key])
+                db.commit()
 
     db_cursor = db.cursor()
     db_cursor.execute('''
@@ -184,12 +188,37 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
         'message': 'complete sync'
     }
 
+async def get_allowed_requests(user_handle):
+    position = 1000000
+    current_date = datetime.now()
+    year = current_date.year
+    month = current_date.month 
+    request_body = GetRanksRequest(id_discord_user = None, year = year, month = month)
+    ranks = await get_ranks(request_body)
+    for rank in ranks:
+        if rank['handle'] == user_handle:
+            position = rank['rank']
+            break
+    if position <= 3:
+        return 5
+    elif position <= 10:
+        return 3
+    else:
+        return 1                
+
+def get_time_needed_formatted(seconds_needed_for_next_request):
+    if seconds_needed_for_next_request >= 60 * 60 * 24:
+        return f"{seconds_needed_for_next_request // 60 // 60 // 24} days ;("
+    if seconds_needed_for_next_request >= 60 * 60:
+        return f"{seconds_needed_for_next_request // 60 // 60 } hours :)"
+    return f"{seconds_needed_for_next_request // 60} minutes :D"
+
 @app.post("/get-score")
 async def get_score(msg: GetScoreRequest):
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute(f'''
-        SELECT id_user, display_name
+        SELECT id_user, display_name, id_discord_user, handle
         FROM user
         WHERE handle = '{msg.handle}'
     ''')
@@ -199,13 +228,38 @@ async def get_score(msg: GetScoreRequest):
             'status': 'failed',
             'message': 'user not found'
         }
-    
+
     id_user = rows[0][0]
     display_name = rows[0][1]
+    id_discord_user = rows[0][2]
+    user_handle = rows[0][3]
 
+    if msg.id_discord_user is not None and msg.id_discord_user != id_discord_user:
+        return {
+            'status': 'failed',
+            'message': 'user not found'
+        }
+
+    if msg.id_discord_user is not None:
+        db_cursor = db.cursor()
+        db_cursor.execute(f'''
+            SELECT created_at 
+            FROM user_call
+            WHERE id_user = '{id_user}' AND TIMESTAMPDIFF(SECOND, NOW(),  created_at) <= 7 * 60 * 60 * 24
+            ORDER BY created_at
+        ''')
+        rows = db_cursor.fetchall()
+
+        number_of_allowed_requests = await get_allowed_requests(user_handle = user_handle)
+        if len(rows) >= number_of_allowed_requests:
+            seconds_needed_for_next_request = int((rows[0][0] + timedelta(days = 7) - datetime.now()).total_seconds())
+            return{
+                'status' :'failed',
+                'message' : f'current limit exceeded, you will be able to request again after {get_time_needed_formatted(seconds_needed_for_next_request)}'
+            }
     db_cursor = db.cursor()
     db_cursor.execute(f'''
-        SELECT problem_name, problem_rate
+        SELECT problem_rate
         FROM submission
         WHERE
             id_user = '{id_user}' AND
@@ -230,14 +284,22 @@ async def get_score(msg: GetScoreRequest):
     solved = 0
     problems = {}
     for row in rows:
-        problem_name = row[0]
-        problem_rate = row[1]
+        problem_rate = row[0]
         solved += 1
         score += scores[problem_rate]
         if problem_rate in problems:
             problems[problem_rate] += 1
         else:
             problems[problem_rate] = 1
+
+    if msg.id_discord_user is not None: 
+        db_cursor = db.cursor()
+        db_cursor.execute('''
+            INSERT INTO user_call
+            (id_user)
+            VALUES(%s)
+        ''', [id_user])
+        db.commit()
 
     return {
         'score': score,
@@ -247,6 +309,41 @@ async def get_score(msg: GetScoreRequest):
 
 @app.post("/get-ranks")
 async def get_ranks(msg: GetRanksRequest):
+    if msg.id_discord_user is not None:
+        db = get_db_connection()
+        db_cursor = db.cursor()
+        db_cursor.execute(f'''
+            SELECT handle, id_user
+            FROM user
+            WHERE id_discord_user = '{msg.id_discord_user}'
+        ''')
+        rows = db_cursor.fetchall()
+        if len(rows) == 0:
+            return {
+                'status': 'failed',
+                'message': 'user not found'
+            }
+
+        user_handle = rows[0][0]
+        id_user = rows[0][1]
+
+        db_cursor = db.cursor()
+        db_cursor.execute(f'''
+            SELECT created_at 
+            FROM user_call
+            WHERE id_user = '{id_user}' AND TIMESTAMPDIFF(SECOND, NOW(),  created_at) <= 7 * 60 * 60 * 24
+            ORDER BY created_at
+        ''')
+        rows = db_cursor.fetchall()
+        
+        number_of_allowed_requests = await get_allowed_requests(user_handle = user_handle)
+        if len(rows) >= number_of_allowed_requests:
+            seconds_needed_for_next_request = int((rows[0][0] + timedelta(days = 7) - datetime.now()).total_seconds())
+            return{
+                'status' :'failed',
+                'message' : f'current limit exceeded, you will be able to request again after {get_time_needed_formatted(seconds_needed_for_next_request)}'
+            }
+
     users = await get_users()
     from_date = datetime(msg.year, msg.month, 1, 0, 0, 0)
     to_date = datetime(msg.year, msg.month + 1, 1, 0, 0, 0) + timedelta(seconds = -1)
@@ -254,7 +351,7 @@ async def get_ranks(msg: GetRanksRequest):
     result = []
     
     for user in users['users']:
-        request_body = GetScoreRequest(handle=user['handle'], from_date=from_date, to_date=to_date)
+        request_body = GetScoreRequest(handle=user['handle'], id_discord_user=None, from_date=from_date, to_date=to_date)
         score = await get_score(request_body)
         result.append({
             'handle': user['handle'],
@@ -270,8 +367,16 @@ async def get_ranks(msg: GetRanksRequest):
         item['rank'] = rank
         rank += 1
 
-    return sorted_result
+    if msg.id_discord_user is not None:
+        db_cursor = db.cursor()
+        db_cursor.execute('''
+            INSERT INTO user_call
+            (id_user)
+            VALUES(%s)
+        ''', [id_user])
+        db.commit()
 
+    return sorted_result
 
 @app.post("/publish-html-content")
 async def publish_html_content(msg: PublishHtmlContentRequest):
@@ -303,3 +408,4 @@ async def get_html_content(code: str):
     if len(rows) == 0:
         return HTMLResponse(content='404! page not found', status_code=200)
     return HTMLResponse(content=rows[0][0], status_code=200)
+
