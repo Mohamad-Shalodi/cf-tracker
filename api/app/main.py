@@ -150,7 +150,7 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
     submissions = response.json().get('result', [])
     submissions = list(reversed(submissions))
     for submission in submissions:
-        problem_key = f"{submission['problem']['contestId']} + {submission['problem']['index']}"
+        problem_key = f"{submission['problem']['contestId']}{submission['problem']['index']}"
         creation_time = datetime.fromtimestamp(submission['creationTimeSeconds'])
         problem_rate = int(submission.get('problem', {}).get('rating', 0))
         verdict = submission.get('verdict', 'WRONG_ANSWER')
@@ -166,7 +166,7 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
             ''', [id_user, problem_key, problem_rate, creation_time])
             db.commit()
         except Exception as e:
-            if (now_date - creation_time).total_seconds() < 60 * 60 * 24 * 7:
+            if (now_date - creation_time).total_seconds() >= 60 * 60 * 24 * 7:
                 db_cursor = db.cursor()
                 db_cursor.execute('''
                     UPDATE submission
