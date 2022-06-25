@@ -429,12 +429,29 @@ async def get_tier(msg:getTierRequest):
     for t in temp:
         if(score >= t):
             tier = tiers[t]
+    
+    db = get_db_connection()
+    db_cursor = db.cursor()
+    db_cursor.execute(f'''
+        SELECT tier_border
+        FROM tiers
+        WHERE tier_name = '{tier}'
+    ''')
+    rows = db_cursor.fetchall()
+    if len(rows) == 0:
+        return {
+            'status': 'failed',
+            'message': 'tier name is wrong or not added to the database'
+        }
+    border = rows[0]    
+    
     return{
         'tier': tier,
         'total score': score,
         'name': user_name,
         'handle': handle,
-        'image': user_image
+        'image': user_image,
+        'border' :border
     }
     
     
