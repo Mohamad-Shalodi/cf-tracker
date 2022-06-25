@@ -27,13 +27,22 @@ class GetScoreRequest(BaseModel):
     to_date: datetime
     id_discord_user: Optional[str]
 
-class GetRanksRequest(BaseModel):
+class getRanksRequest(BaseModel):
     year: int
     month: int
     id_discord_user: Optional[str]
 
+class getTierRequest(BaseModel):
+    handle: str
+    from_date: datetime
+    to_date: datetime
+
+class getTierRank(BaseModel):
+    year: int
+    
 class PublishHtmlContentRequest(BaseModel):
     html: str
+
 
 
 def get_db_connection():
@@ -317,32 +326,32 @@ async def get_ranks(msg: GetRanksRequest):
             FROM user
             WHERE id_discord_user = '{msg.id_discord_user}'
         ''')
-        rows = db_cursor.fetchall()
-        if len(rows) == 0:
-            return {
-                'status': 'failed',
-                'message': 'user not found'
-            }
+    rows = db_cursor.fetchall()
+    if len(rows) == 0:
+        return {
+            'status': 'failed',
+            'message': 'user not found'
+        }
 
-        user_handle = rows[0][0]
-        id_user = rows[0][1]
+    user_handle = rows[0][0]
+    id_user = rows[0][1]
 
-        db_cursor = db.cursor()
-        db_cursor.execute(f'''
-            SELECT created_at 
-            FROM user_call
-            WHERE id_user = '{id_user}' AND TIMESTAMPDIFF(SECOND, NOW(),  created_at) <= 7 * 60 * 60 * 24
-            ORDER BY created_at
-        ''')
-        rows = db_cursor.fetchall()
-        
-        number_of_allowed_requests = await get_allowed_requests(user_handle = user_handle)
-        if len(rows) >= number_of_allowed_requests:
-            seconds_needed_for_next_request = int((rows[0][0] + timedelta(days = 7) - datetime.now()).total_seconds())
-            return{
-                'status' :'failed',
-                'message' : f'current limit exceeded, you will be able to request again after {get_time_needed_formatted(seconds_needed_for_next_request)}'
-            }
+    db_cursor = db.cursor()
+    db_cursor.execute(f'''
+        SELECT created_at 
+        FROM user_call
+        WHERE id_user = '{id_user}' AND TIMESTAMPDIFF(SECOND, NOW(),  created_at) <= 7 * 60 * 60 * 24
+        ORDER BY created_at
+    ''')
+    rows = db_cursor.fetchall()
+    
+    number_of_allowed_requests = await get_allowed_requests(user_handle = user_handle)
+    if len(rows) >= number_of_allowed_requests:
+        seconds_needed_for_next_request = int((rows[0][0] + timedelta(days = 7) - datetime.now()).total_seconds())
+        return{
+            'status' :'failed',
+            'message' : f'current limit exceeded, you will be able to request again after {get_time_needed_formatted(seconds_needed_for_next_request)}'
+        }
 
     users = await get_users()
     from_date = datetime(msg.year, msg.month, 1, 0, 0, 0)
@@ -378,6 +387,84 @@ async def get_ranks(msg: GetRanksRequest):
 
     return sorted_result
 
+@app.post("/get-tier")
+async def get_tier(msg:getTierRequest):
+    db = get_db_connection()
+    db_cursor = db.cursor()
+    db_cursor.execute(f'''
+        SELECT display_name, handle, image
+        FROM user
+        WHERE handle = '{msg.handle}'
+    ''')
+    rows = db_cursor.fetchall()
+    if len(rows) == 0:
+        return {
+            'status': 'failed',
+            'message': 'user not found'
+        }
+
+    user_name = rows[0][0]
+    handle = rows[0][1]
+    user_image = rows[0][2]
+
+    #will figure from_date later and change it
+    from_date = datetime.now()
+    to_date = datetime.now()
+    request_body = GetScoreRequest(handle=user['handle'], id_discord_user=None, from_date=from_date, to_date=to_date)
+    score = await get_score(request_body)
+    #the scoring below is teporary at the moment
+    tiers = {
+        0: "Iron",
+        350: "Bronze",
+        1250: "Silver",
+        4000: "Gold",
+        10000: "Platinum",
+        17500: "Diamond",
+        25000: "Master",
+        30000: "Grand Master",
+        40000: "Legendary"
+    }
+    tier =""
+    temp = tiers.keys
+    for t in temp:
+        if(score >= t):
+            tier = tiers[t]
+    return{
+        'tier': tier,
+        'total score': score,
+        'name': user_name,
+        'handle': handle,
+        'image': user_image
+    }
+    
+    
+
+@app.post("/TierRank")
+async def tier_rank(msg: getTierRank):
+    db = get_db_connection()
+    db_cursor = db.cursor()
+    db_cursor.execute(f'''
+        SELECT handle, id_user
+        FROM user
+    ''')
+    useres =  db_cursor.fetchall()
+    if(len(users) == 0):
+        return{
+            'status': 'failed',
+            'message': 'no users in the database'
+        }
+    result = []
+    for user in users:
+            #must edit on from_date here also
+            request_body = getTierRequest(handle = user[0][0],from_date = datetime.now(), to_date= datetime.now())
+            result.append(get_tier(request_body))
+    sorted_result = sorted(result, key=lambda d:d['score'],reverse = true)
+    rank = 1
+    for item in sorted_result:
+        item['rank'] = rank
+        rank += 1
+    return sorted_result
+    
 @app.post("/publish-html-content")
 async def publish_html_content(msg: PublishHtmlContentRequest):
     code = f'P{str(random.randint(100000000, 999999999))}'
