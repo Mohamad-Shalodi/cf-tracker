@@ -27,17 +27,15 @@ class GetScoreRequest(BaseModel):
     to_date: datetime
     id_discord_user: Optional[str]
 
-class getRanksRequest(BaseModel):
+class GetRanksRequest(BaseModel):
     year: int
     month: int
     id_discord_user: Optional[str]
 
-class getTierRequest(BaseModel):
+class GetTierRequest(BaseModel):
     handle: str
-    from_date: datetime
-    to_date: datetime
 
-class getTierRank(BaseModel):
+class GetTierRank(BaseModel):
     year: int
     
 class PublishHtmlContentRequest(BaseModel):
@@ -165,7 +163,6 @@ async def sync_user(msg: SyncUserRequest, force: bool = False):
         verdict = submission.get('verdict', 'WRONG_ANSWER')
         if verdict != "OK":
             continue
-
         try:
             db_cursor = db.cursor()
             db_cursor.execute('''
@@ -286,7 +283,8 @@ async def get_score(msg: GetScoreRequest):
         1900: 100, 2000: 100, 2100: 100, 2200: 100,
         2300: 100, 2400: 100, 2500: 100, 2600: 100,
         2700: 100, 2800: 100, 2900: 100, 3000: 100,
-        3100: 100, 3200: 100, 3300: 100, 3400: 100
+        3100: 100, 3200: 100, 3300: 100, 3400: 100,
+        3500: 100
     }
 
     score = 0
@@ -311,6 +309,7 @@ async def get_score(msg: GetScoreRequest):
         db.commit()
 
     return {
+        'status': 'success',
         'score': score,
         'solved': solved,
         'problems': problems
@@ -388,7 +387,7 @@ async def get_ranks(msg: GetRanksRequest):
     return sorted_result
 
 @app.post("/get-tier")
-async def get_tier(msg:getTierRequest):
+async def get_tier(msg: GetTierRequest):
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute(f'''
@@ -407,11 +406,16 @@ async def get_tier(msg:getTierRequest):
     handle = rows[0][1]
     user_image = rows[0][2]
 
-    #will figure from_date later and change it
-    from_date = datetime.now()
+    from_date = datetime(datetime.now().year, 1, 1, 0, 0, 0)
     to_date = datetime.now()
-    request_body = GetScoreRequest(handle=user['handle'], id_discord_user=None, from_date=from_date, to_date=to_date)
-    score = await get_score(request_body)
+    request_body = GetScoreRequest(handle=handle, id_discord_user=None, from_date=from_date, to_date=to_date)
+    result = await get_score(request_body)
+    if result['status'] == 'failed':
+        return {
+            'status': 'failed',
+            'message': 'something went wrong when trying to get the score'
+        }
+    score = result['score']
     #the scoring below is teporary at the moment
     tiers = {
         0: "Iron",
@@ -425,57 +429,48 @@ async def get_tier(msg:getTierRequest):
         40000: "Legendary"
     }
     tier =""
-    temp = tiers.keys
-    for t in temp:
-        if(score >= t):
+    for t in tiers.keys():
+        if score >= t:
             tier = tiers[t]
+        else:
+            break    
     
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute(f'''
-        SELECT tier_border
-        FROM tiers
-        WHERE tier_name = '{tier}'
+        SELECT border
+        FROM tier
+        WHERE name = '{tier}'
     ''')
     rows = db_cursor.fetchall()
     if len(rows) == 0:
-        return {
-            'status': 'failed',
-            'message': 'tier name is wrong or not added to the database'
-        }
-    border = rows[0]    
+        raise 'the tier does not exist in the database'
+    border = rows[0][0]    
     
-    return{
-        'tier': tier,
-        'total score': score,
+    return {
+        'tier_name': tier,
+        'total_score': score,
         'name': user_name,
         'handle': handle,
         'image': user_image,
-        'border' :border
+        'border': border
     }
     
-    
-
-@app.post("/TierRank")
-async def tier_rank(msg: getTierRank):
+@app.get("/tier-rank")
+async def tier_rank(year: int):
     db = get_db_connection()
     db_cursor = db.cursor()
     db_cursor.execute(f'''
-        SELECT handle, id_user
+        SELECT handle
         FROM user
     ''')
-    useres =  db_cursor.fetchall()
-    if(len(users) == 0):
-        return{
-            'status': 'failed',
-            'message': 'no users in the database'
-        }
+    users =  db_cursor.fetchall()
     result = []
     for user in users:
-            #must edit on from_date here also
-            request_body = getTierRequest(handle = user[0][0],from_date = datetime.now(), to_date= datetime.now())
-            result.append(get_tier(request_body))
-    sorted_result = sorted(result, key=lambda d:d['score'],reverse = true)
+        from_date = datetime(datetime.now().year, 1, 1, 0, 0, 0)
+        request_body = GetTierRequest(handle=user[0], from_date=from_date, to_date=datetime.now())
+        result.append(await get_tier(request_body))
+    sorted_result = sorted(result, key=lambda d:d['total_score'], reverse=True)
     rank = 1
     for item in sorted_result:
         item['rank'] = rank
